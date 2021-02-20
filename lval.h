@@ -1,8 +1,6 @@
 #ifndef LVAL_H
 #define LVAL_H
 
-#include "mpc.h"
-
 /* Create Enumeration of Possible lval Types */
 enum {LVAL_NUM, LVAL_ERR, LVAL_SYM, LVAL_STR, LVAL_FUN, LVAL_SEXPR, LVAL_QEXPR };
 
@@ -75,7 +73,7 @@ int lval_eq(lval* x, lval* y);
 
 lval* lval_eval(struct lenv* e, lval* v);
 
-lval* lval_read(mpc_ast_t* t);
+int lval_read_expr(lval* v, char* s, int i, char end);
 void lval_print(lval* v);
 void lval_println(lval* v);
 

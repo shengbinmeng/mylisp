@@ -1,3 +1,8 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <errno.h>
 #include "lval.h"
 #include "lenv.h"
 
@@ -400,54 +405,195 @@ lval* lval_eval_sexpr(lenv* e, lval* v) {
 }
 
 
-lval* lval_read_num(mpc_ast_t* t) {
-  errno = 0;
-  long x = strtol(t->contents, NULL, 10);
-  return errno != ERANGE ?
-    lval_num(x) : lval_err("invalid number");
-}
+int lval_read_sym(lval* v, char* s, int i) {
 
-lval* lval_read_str(mpc_ast_t* t) {
-  /* Cut off the final quote character */
-  t->contents[strlen(t->contents)-1] = '\0';
-  /* Copy the string missing out the first quote character */
-  char* unescaped = malloc(strlen(t->contents+1)+1);
-  strcpy(unescaped, t->contents+1);
-  /* Pass through the unescape function */
-  unescaped = mpcf_unescape(unescaped);
-  /* Construct a new lval using the string */
-  lval* str = lval_str(unescaped);
-  /* Free the string and return */
-  free(unescaped);
-  return str;
-}
+  /* Allocate Empty String */
+  char* part = calloc(1,1);
 
-lval* lval_read(mpc_ast_t* t) {
+  /* While valid identifier characters */
+  while (strchr(
+      "abcdefghijklmnopqrstuvwxyz"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "0123456789_+-*\\/=<>!&", s[i]) && s[i] != '\0') {
 
-  /* If Symbol or Number return conversion to that type */
-  if (strstr(t->tag, "number")) { return lval_read_num(t); }
-  if (strstr(t->tag, "symbol")) { return lval_sym(t->contents); }
-  if (strstr(t->tag, "string")) { return lval_read_str(t); }
-
-  /* If root (>) or sexpr/qexpr then create empty list */
-  lval* x = NULL;
-  if (strcmp(t->tag, ">") == 0) { x = lval_sexpr(); }
-  if (strstr(t->tag, "sexpr"))  { x = lval_sexpr(); }
-  if (strstr(t->tag, "qexpr"))  { x = lval_qexpr(); }
-
-  /* Fill this list with any valid expression contained within */
-  for (int i = 0; i < t->children_num; i++) {
-    if (strcmp(t->children[i]->contents, "(") == 0) { continue; }
-    if (strcmp(t->children[i]->contents, ")") == 0) { continue; }
-    if (strcmp(t->children[i]->contents, "}") == 0) { continue; }
-    if (strcmp(t->children[i]->contents, "{") == 0) { continue; }
-    if (strcmp(t->children[i]->tag,  "regex") == 0) { continue; }
-    if (strstr(t->children[i]->tag, "comment")) { continue; }
-    x = lval_add(x, lval_read(t->children[i]));
+    /* Append character to end of string */
+    part = realloc(part, strlen(part)+2);
+    part[strlen(part)+1] = '\0';
+    part[strlen(part)+0] = s[i];
+    i++;
   }
 
-  return x;
+  /* Check if Identifier looks like number */
+  int is_num = strchr("-0123456789", part[0]) ? 1 : 0;
+  /* It's not a number if we only have a single '-'. */
+  if (part[0] == '-' && strlen(part) == 1) is_num = 0;
+  for (int i = 1; i < strlen(part); i++) {
+    if (!strchr("0123456789", part[i])) { is_num = 0; break; }
+  }
+
+  /* Add Symbol or Number as lval */
+  if (is_num) {
+    errno = 0;
+    long x = strtol(part, NULL, 10);
+    lval_add(v, errno != ERANGE ? lval_num(x) : lval_err("Invalid Number %s", part));
+  } else {
+    lval_add(v, lval_sym(part));
+  }
+
+  /* Free temp string */
+  free(part);
+
+  /* Return updated position in input */
+  return i;
 }
+
+/* Possible unescapable characters */
+char* lval_str_unescapable = "abfnrtv\\\'\"";
+
+/* List of possible escapable characters */
+char* lval_str_escapable = "\a\b\f\n\r\t\v\\\'\"";
+
+/* Function to unescape characters */
+char lval_str_unescape(char x) {
+  switch (x) {
+    case 'a':  return '\a';
+    case 'b':  return '\b';
+    case 'f':  return '\f';
+    case 'n':  return '\n';
+    case 'r':  return '\r';
+    case 't':  return '\t';
+    case 'v':  return '\v';
+    case '\\': return '\\';
+    case '\'': return '\'';
+    case '\"': return '\"';
+  }
+  return '\0';
+}
+
+/* Function to escape characters */
+char* lval_str_escape(char x) {
+  switch (x) {
+    case '\a': return "\\a";
+    case '\b': return "\\b";
+    case '\f': return "\\f";
+    case '\n': return "\\n";
+    case '\r': return "\\r";
+    case '\t': return "\\t";
+    case '\v': return "\\v";
+    case '\\': return "\\\\";
+    case '\'': return "\\\'";
+    case '\"': return "\\\"";
+  }
+  return "";
+}
+
+
+int lval_read_str(lval* v, char* s, int i) {
+
+  /* Allocate empty string */
+  char* part = calloc(1,1);
+
+  while (s[i] != '"') {
+
+    char c = s[i];
+
+    /* If end of input then there is an unterminated string literal */
+    if (c == '\0') {
+      lval_add(v, lval_err("Unexpected end of input at string literal"));
+      free(part);
+      return strlen(s);
+    }
+
+    /* If backslash then unescape character after it */
+    if (c == '\\') {
+      i++;
+      /* Check next character is escapable */
+      if (strchr(lval_str_unescapable, s[i])) {
+        c = lval_str_unescape(s[i]);
+      } else {
+        lval_add(v, lval_err("Invalid escape character %c", c));
+        free(part);
+        return strlen(s);
+      }
+    }
+
+    /* Append character to string */
+    part = realloc(part, strlen(part)+2);
+    part[strlen(part)+1] = '\0';
+    part[strlen(part)+0] = c;
+    i++;
+  }
+
+  /* Add lval and free temp string */
+  lval_add(v, lval_str(part));
+
+  free(part);
+
+  return i+1;
+}
+
+int lval_read_expr(lval* v, char* s, int i, char end) {
+
+  while (s[i] != end) {
+
+    /* If we reach end of input then there is some syntax error */
+    if (s[i] == '\0') {
+      lval_add(v, lval_err("Missing %c at end of input", end));
+      return strlen(s)+1;
+    }
+
+    /* Skip all whitespace */
+    if (strchr(" \t\v\r\n", s[i])) {
+      i++;
+      continue;
+    }
+
+    /* If next char is ; then read comment */
+    if (s[i] == ';') {
+      while (s[i] != '\n' && s[i] != '\0') { i++; }
+      i++;
+      continue;
+    }
+
+    /* If next character is ( then read S-Expr */
+    if (s[i] == '(') {
+      lval* x = lval_sexpr();
+      lval_add(v, x);
+      i = lval_read_expr(x, s, i+1, ')');
+      continue;
+    }
+
+    /* If next character is { then read Q-Expr */
+    if (s[i] == '{') {
+      lval* x = lval_qexpr();
+      lval_add(v, x);
+      i = lval_read_expr(x, s, i+1, '}');
+      continue;
+    }
+
+    /* If next character is part of a symbol then read symbol */
+    if (strchr(
+      "abcdefghijklmnopqrstuvwxyz"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "0123456789_+-*\\/=<>!&", s[i])) {
+      i = lval_read_sym(v, s, i);
+      continue;
+    }
+
+     /* If next character is " then read string */
+    if (strchr("\"", s[i])) {
+      i = lval_read_str(v, s, i+1);
+      continue;
+    }
+
+     /* Encountered some unknown character */
+    lval_add(v, lval_err("Unknown Character %c", s[i]));
+    return strlen(s)+1;
+  }
+
+  return i+1;
+}
+
 
 void lval_expr_print(lval* v, char open, char close) {
   putchar(open);
@@ -465,15 +611,18 @@ void lval_expr_print(lval* v, char open, char close) {
 }
 
 void lval_print_str(lval* v) {
-  /* Make a Copy of the string */
-  char* escaped = malloc(strlen(v->str)+1);
-  strcpy(escaped, v->str);
-  /* Pass it through the escape function */
-  escaped = mpcf_escape(escaped);
-  /* Print it between " characters */
-  printf("\"%s\"", escaped);
-  /* free the copied string */
-  free(escaped);
+  putchar('"');
+  /* Loop over the characters in the string */
+  for (int i = 0; i < strlen(v->str); i++) {
+    if (strchr(lval_str_escapable, v->str[i])) {
+      /* If the character is escapable then escape it */
+      printf("%s", lval_str_escape(v->str[i]));
+    } else {
+      /* Otherwise print character as it is */
+      putchar(v->str[i]);
+    }
+  }
+  putchar('"');
 }
 
 /* Print an "lval" */

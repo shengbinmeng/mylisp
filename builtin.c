@@ -1,3 +1,6 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include "lenv.h"
 #include "lval.h"
 
@@ -278,48 +281,45 @@ lval* builtin_if(lenv* e, lval* a) {
   return x;
 }
 
-extern mpc_parser_t* Lispy;
-
 lval* builtin_load(lenv* e, lval* a) {
   LASSERT_NUM("load", a, 1);
   LASSERT_TYPE("load", a, 0, LVAL_STR);
 
-  /* Parse File given by string name */
-  mpc_result_t r;
-  if (mpc_parse_contents(a->cell[0]->str, Lispy, &r)) {
+  /* Open file and check it exists */
+  FILE* f = fopen(a->cell[0]->str, "rb");
+  if (f == NULL) {
+    lval* err = lval_err("Could not load Library %s", a->cell[0]->str);
+    lval_del(a);
+    return err;
+  }
 
-    /* Read contents */
-    lval* expr = lval_read(r.output);
-    mpc_ast_delete(r.output);
+  /* Read File Contents */
+  fseek(f, 0, SEEK_END);
+  long length = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  char* input = calloc(length+1, 1);
+  fread(input, 1, length, f);
+  fclose(f);
 
-    /* Evaluate each Expression */
+  lval* expr = lval_sexpr();
+  lval_read_expr(expr, input, 0, '\0');
+
+  /* Evaluate all expressions contained in S-Expr */
+  if (expr->type != LVAL_ERR) {
     while (expr->count) {
       lval* x = lval_eval(e, lval_pop(expr, 0));
-      /* If Evaluation leads to error print it */
       if (x->type == LVAL_ERR) { lval_println(x); }
       lval_del(x);
     }
-
-    /* Delete expressions and arguments */
-    lval_del(expr);
-    lval_del(a);
-
-    /* Return empty list */
-    return lval_sexpr();
-
   } else {
-    /* Get Parse Error as String */
-    char* err_msg = mpc_err_string(r.error);
-    mpc_err_delete(r.error);
-
-    /* Create new error message using it */
-    lval* err = lval_err("Could not load Library %s", err_msg);
-    free(err_msg);
-    lval_del(a);
-
-    /* Cleanup and return error */
-    return err;
+    lval_println(expr);
   }
+
+  lval_del(expr);
+
+  lval_del(a);
+
+  return lval_sexpr();
 }
 
 lval* builtin_print(lenv* e, lval* a) {

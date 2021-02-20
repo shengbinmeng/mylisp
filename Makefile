@@ -9,9 +9,9 @@ APP := lispy
 $(APP): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-# Alternative command
+# Alternative command to build for debug.
 mylisp:
-	$(CC) -std=c99 -O2 -Wall lispy.c mpc.c lenv.c lval.c builtin.c -ledit -lm -o mylisp
+	$(CC) -std=c99 -g -Wall lispy.c mpc.c lenv.c lval.c builtin.c -ledit -lm -o mylisp
 
 .PHONY: clean
 clean:
